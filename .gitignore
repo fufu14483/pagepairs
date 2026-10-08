@@ -1,0 +1,30 @@
+# 排除构建产物（exe 由 Releases 分发，不进版本库）
+*.exe
+*.dll
+*.pyd
+*.so
+
+# 便携包与内置运行时（体积巨大，走 Releases）
+engine/
+同页对照工具-便携包/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 本工具的运行期产物
+translated/
+*.geom.json
+*.config.json
+_diag/
+
+# 备份与临时文件
+*.bak
+*.bak_*
+_exe_backup_*/
+*.log
+.DS_Store
+Thumbs.db
