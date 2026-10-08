@@ -59,7 +59,15 @@ OFL 允许免费使用、修改、再分发（含商业用途），但要求：
 - [ ] 就 MaruBuri 做出决策（删 / 换 / 确认授权）
 - [ ] 便携包内加 `FONT-LICENSES\` 目录存放上述文件
 
----
+## 复现方式
 
-生成方式：`_font_audit.py`（解析 `name`/`OS/2` 表）+ `_font_summary.py`（汇总）。
-数据来源为字体文件自身元数据，可复现。
+核实脚本已随仓库提供，可自行复现：
+
+```powershell
+python tools/font_audit.py   <字体目录>  fonts.json
+python tools/font_summary.py fonts.json
+```
+
+`font_audit.py` 解析字体文件的 `name` 表（ID 0/1/7/8/11/12/13/14）与
+`OS/2` 表的 `fsType` 位；`font_summary.py` 汇总为上述结论。
+除 Python 标准库外**无任何依赖**，也不需要联网。
