@@ -31,10 +31,13 @@ GPL-2.0 与 AGPL-3.0 不自动兼容；但因该组件为 **or-later**，可选�
 
 便携包 `engine\models\.cache\babeldoc\fonts\` 内含 34 个字体文件，**当前未随附任何字体许可证文件**。
 
-涉及字体族：Noto Sans/Serif、Source Han Sans/Serif（思源）、LXGW WenKai（霞鹜文楷）、GoNotoKurrent、KleeOne、MaruBuri。
+**经解析各字体文件内嵌的 `name` 表核实：33/34 明确为 SIL OFL-1.1**，涉及 Noto Sans/Serif、Go Noto Kurrent、Source Han Sans/Serif（思源）、LXGW WenKai GB / 霞鶩文楷 TC、Klee One。
 
-多数应为 SIL OFL 或 Apache-2.0，但**公开分发前必须逐个核对并补齐许可证全文**；OFL 另行要求：若对字体做了修改，不得继续使用原保留字体名（Reserved Font Name）。
-本仓库不包含这些字体。
+**唯一异常项：`MaruBuri-Regular.ttf`**（© NAVER Corp.）——`name` 表中**没有** License Description 与 License URL 字段，仅有 `fsType=0x0008`（Editable embedding，属嵌入权限位，**不代表授予再分发权**）。其授权需另行确认。
+
+OFL-1.1 要求随附许可证全文、保留版权声明、修改后不得使用保留字体名。包内需注意 Adobe 思源系列的保留字体名为 **`Source`**。
+
+**注意：本仓库不包含上述任何字体文件。** 完整核实结果见 [FONTS.md](FONTS.md)。
 
 
 ## 全部依赖清单

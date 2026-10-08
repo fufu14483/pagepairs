@@ -1,0 +1,93 @@
+name: Build EXEs
+
+# 打 tag（如 v1.0.0）时自动构建三个 exe 并附到 Release。
+# 也可在 Actions 页面手动触发（workflow_dispatch）只做构建、上传 artifact。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # build_exes.ps1 会自己建一次性 venv，并钉死 pymupdf 版本。
+      # 这里只需把用于建 venv 的解释器指给它。
+      - name: Build the three executables
+        shell: pwsh
+        env:
+          DUAL_BUILD_PY: ${{ env.pythonLocation }}\python.exe
+        run: |
+          ./build_exes.ps1
+          # build_exes.ps1 内部用了 Set-Location，需回到仓库根目录
+          Set-Location $env:GITHUB_WORKSPACE
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist-out -Force | Out-Null
+          $names = @("同页对照工具.exe", "DualGuiCLI.exe", "DualEngine.exe")
+          foreach ($n in $names) {
+            if (-not (Test-Path $n)) { throw "缺少构建产物: $n" }
+            Copy-Item $n dist-out -Force
+          }
+          Copy-Item README.md LICENSE dist-out -Force
+          Get-ChildItem dist-out | Select-Object Name, Length
+
+      # 冒烟测试：不带参数调用会打印用法并返回 2（cli_main 的既定行为）。
+      # 该路径不会 import pymupdf，因此可安全验证启动器确实能跑起来。
+      - name: Smoke test launcher
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath ".\dist-out\DualGuiCLI.exe" -NoNewWindow -Wait -PassThru
+          if ($p.ExitCode -ne 2) { throw "启动器冒烟测试失败，退出码 $($p.ExitCode)（期望 2）" }
+          Write-Host "启动器可正常运行（退出码 2 = 打印用法）"
+
+      # 架构铁律验证：启动器包里绝不能含 PyMuPDF。
+      # 用 strings 式扫描确认 DLL 名未出现在 launcher 中。
+      - name: Verify launchers exclude PyMuPDF
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes(".\dist-out\DualGuiCLI.exe")
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if ($text -match "mupdfcpp64|_mupdf\.pyd") {
+            throw "启动器包含 PyMuPDF 二进制 —— 违反架构铁律，会破坏 pdf2zh 子进程"
+          }
+          Write-Host "启动器未包含 PyMuPDF（符合架构铁律）"
+
+      - name: Upload artifact (manual runs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dual-pdf-tool-exes
+          path: dist-out/
+
+      - name: Attach to Release (tag runs)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-out/*
+          body: |
+            同页对照 PDF 工具 —— 免安装版本。
+
+            | 文件 | 说明 |
+            |---|---|
+            | `同页对照工具.exe` | 图形界面，双击即用 |
+            | `DualGuiCLI.exe` | 命令行版（脚本/回归调用） |
+            | `DualEngine.exe` | 合成引擎，由上面两个自动调起，**勿单独使用** |
+
+            三个文件需放在**同一目录**下。在线翻译功能需要联网。
+
+            本版本以 AGPL-3.0 发布，详见仓库中的 LICENSE、DEPENDENCIES.md 与
+            THIRD-PARTY-NOTICES.md。

@@ -26,7 +26,26 @@
 
 ## 快速开始
 
+### 方式零：从源码运行（clone 本仓库后）
+
+本仓库**只含源码**（0.6 MB），不含 exe。预编译 exe 见 Releases 页面。
+
+```powershell
+# 1. 装依赖（引擎需要 PyMuPDF，版本务必与 README 踩坑表一致）
+pip install pymupdf==1.28.2
+
+# 2. 直接跑
+python dual_gui.py                    # 图形界面
+python make_dual.py 英文原文.pdf --mono 中文译文.pdf -o 同页对照.pdf   # 命令行
+```
+
+在线翻译需另行准备 `pdf2zh_next`，用 `--p2zh` 指定路径，或设环境变量
+`DUAL_P2ZH`。合成（已有 mono 译文）不需要它。
+
 ### 方式一：双击 `同页对照工具.exe`（推荐，无需 Python / 无需本 README 之外的一切）
+
+> 该 exe 由 CI 在打 tag 时构建并发布到 Releases；也可本地运行
+> `./build_exes.ps1` 自行重建。
 
 1. 双击 exe（可放桌面/任何文件夹，**单文件 30MB，自包含**）；
 2. 选"英文原文 PDF"；"中文译文"留空即自动在同目录及 `translated\` 里找 mono 译文，找不到且勾选"自动在线翻译"则调 pdf2zh 翻译；
