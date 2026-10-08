@@ -11,6 +11,14 @@
 | [PyMuPDF](https://github.com/pymupdf/PyMuPDF) | PDF 解析与写入（核心引擎） | AGPL-3.0 或 Artifex 商业许可 |
 | [pdf2zh_next](https://github.com/PDFMathTranslate/PDFMathTranslate-next) | 在线翻译后端（可选） | AGPL-3.0 |
 | [babeldoc](https://github.com/funstory-ai/BabelDOC) | 版面分析与翻译（pdf2zh 的依赖） | AGPL-3.0 |
+| [levenshtein](https://github.com/rapidfuzz/Levenshtein) | 译文质量判定（babeldoc 的**硬依赖**） | **GPL-2.0-or-later** |
+
+> 完整的传递依赖清单（138 个发行版）见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)，
+> 由脚本读取实际元数据生成。
+>
+> 注意 `levenshtein` 是 GPL-2.0-or-later，且是 babeldoc 的硬依赖（非可选）。
+> 它仅随**便携包**分发，本源码仓库不包含其代码。因其为 or-later，可选用 GPLv3
+> 与本项目的 AGPLv3 兼容。分发便携包时须保留其许可证声明。
 
 ## 构建期依赖
 
