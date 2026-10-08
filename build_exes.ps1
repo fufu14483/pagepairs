@@ -1,4 +1,4 @@
-﻿# 重建三个 exe（需联网装 pip 包；产出复制回本目录）
+# 重建三个 exe（需联网装 pip 包；产出复制回本目录）
 # 架构铁律：启动器 exe 的包里【绝不能】含 PyMuPDF——被污染的包会让 pdf2zh 孙进程
 # 的 onnxruntime 崩溃（见 README 踩坑表）。合成（要用 pymupdf、不开子进程）隔离进
 # DualEngine.exe。在工具目录同级找/建一个一次性构建 venv。
@@ -68,6 +68,6 @@ foreach ($f in $built) {
     throw "缺少构建产物 $f（该目录下实际有: ${got}）——若名字是乱码，说明本脚本被按非 UTF-8 代码页读取，请用 pwsh 7 或确认文件带 UTF-8 BOM"
   }
 }
-Copy-Item $built $T -Force
+Copy-Item -LiteralPath $built -Destination $T -Force
 Remove-Item $b -Recurse -EA SilentlyContinue
 Write-Host "OK -> $T（三个 exe 已更新）"
