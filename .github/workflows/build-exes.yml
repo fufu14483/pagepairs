@@ -25,18 +25,39 @@ jobs:
 
       # build_exes.ps1 会自己建一次性 venv，并钉死 pymupdf 版本。
       # 这里只需把用于建 venv 的解释器指给它。
+      #
+      # 注意：pythonLocation 是 setup-python 注入的**真实环境变量**，不属于
+      # env 上下文（那个上下文只含 workflow/job/step 用 env: 显式声明的键）。
+      # 用 env 上下文去引用它会静默展开成空串，得到 "\python.exe" 这种假路径，
+      # 把错误推到构建脚本深处。因此只能在脚本内部读 env:pythonLocation。
       - name: Build the three executables
         shell: pwsh
-        env:
-          DUAL_BUILD_PY: ${{ env.pythonLocation }}\python.exe
         run: |
+          # pwsh 步骤默认 ErrorActionPreference=Continue：脚本报红字但退出码仍为 0，
+          # 会把失败的构建伪装成 success，真实原因要等到下一步"收集产物"才暴露。
+          $ErrorActionPreference = 'Stop'
+          # pip / PyInstaller 是原生命令，非零退出同样默认不中止；一并管起来。
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          if (-not $env:pythonLocation) {
+            throw "setup-python 没有提供 pythonLocation 环境变量"
+          }
+          $env:DUAL_BUILD_PY = Join-Path $env:pythonLocation 'python.exe'
+          if (-not (Test-Path $env:DUAL_BUILD_PY)) {
+            throw "构建用 Python 不存在: $env:DUAL_BUILD_PY"
+          }
+          "构建用 Python: $env:DUAL_BUILD_PY"
+          & $env:DUAL_BUILD_PY --version
+
           ./build_exes.ps1
           # build_exes.ps1 内部用了 Set-Location，需回到仓库根目录
           Set-Location $env:GITHUB_WORKSPACE
+          Get-ChildItem *.exe | Select-Object Name, Length
 
       - name: Collect artifacts
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory dist-out -Force | Out-Null
           $names = @("同页对照工具.exe", "DualGuiCLI.exe", "DualEngine.exe")
           foreach ($n in $names) {
@@ -51,6 +72,7 @@ jobs:
       - name: Smoke test launcher
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $p = Start-Process -FilePath ".\dist-out\DualGuiCLI.exe" -NoNewWindow -Wait -PassThru
           if ($p.ExitCode -ne 2) { throw "启动器冒烟测试失败，退出码 $($p.ExitCode)（期望 2）" }
           Write-Host "启动器可正常运行（退出码 2 = 打印用法）"
@@ -60,6 +82,7 @@ jobs:
       - name: Verify launchers exclude PyMuPDF
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $bytes = [System.IO.File]::ReadAllBytes(".\dist-out\DualGuiCLI.exe")
           $text = [System.Text.Encoding]::ASCII.GetString($bytes)
           if ($text -match "mupdfcpp64|_mupdf\.pyd") {
