@@ -59,6 +59,31 @@ OFL 允许免费使用、修改、再分发（含商业用途），但要求：
 - [ ] 就 MaruBuri 做出决策（删 / 换 / 确认授权）
 - [ ] 便携包内加 `FONT-LICENSES\` 目录存放上述文件
 
+## 一键完成方式
+
+上面三项已由脚本实现：
+
+```powershell
+# 先空跑确认会做什么（不改动任何文件）
+python tools/make_portable_licenses.py <便携包目录> --drop-maruburi --dry-run
+
+# 实际执行：移除 MaruBuri + 生成 FONT-LICENSES\ 目录
+python tools/make_portable_licenses.py <便携包目录> --drop-maruburi
+```
+
+脚本会在便携包内生成 `FONT-LICENSES\`：
+
+| 文件 | 内容 |
+|---|---|
+| `OFL.txt` | SIL OFL 1.1 全文（官方原文逐字引入） |
+| `FONT-NOTICES.txt` | 逐字体的版权/商标声明，取自各字体内嵌 `name` 表 |
+| `README.txt` | 说明该目录用途、为何需要、与 AGPL 的关系 |
+
+**脚本不会凭记忆编造许可证文本**：OFL 全文存于 `tools/licenses/OFL-1.1.txt`，
+取自 openfontlicense.org 官方 `OFL.txt`。若发现未声明许可证的字体，
+脚本会**拒绝执行并要求你显式选择** `--drop-maruburi` 或
+`--keep-maruburi`，绝不静默处理。
+
 ## 复现方式
 
 核实脚本已随仓库提供，可自行复现：
