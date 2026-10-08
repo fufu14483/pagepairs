@@ -204,11 +204,12 @@ jobs:
           name: dual-pdf-tool-exes
           path: dist-out/
 
-      # 发布资产用 gh CLI 上传，不再用 softprops/action-gh-release。
-      # 该 action 对非 ASCII 文件名有已知缺陷（issues #542 / #159），本项目实测
-      # 把「同页对照工具.exe」上传成了 default.exe —— 文件内容正确（已下载核对：
-      # 无 PyMuPDF、含 tkinter），但名字错，用户照 README 根本找不到文件。
-      # gh 直接走 REST API，文件名原样保留。
+      # 发布资产直接走 REST API 上传（不用 softprops/action-gh-release，也不用
+      # gh CLI）：两者都在「同页对照工具.exe」这个中文名上栽了跟头——
+      #   run#3（action）把它传成了 default.exe（内容对、名字错）；
+      #   run#4（gh）静默丢弃，Release 里干脆没有 GUI 版，且退出码仍是 0。
+      # 资产名是 query 参数 name=<...>，中文必须显式 URL 编码；这里逐文件上传
+      # 并把每个失败原因写成 ::error:: 注解，杜绝"静默跳过"再次发生。
       - name: Attach to Release (tag runs)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -216,25 +217,71 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = $env:GITHUB_REF_NAME
-          "目标 tag: $tag"
+          $tag  = $env:GITHUB_REF_NAME
+          $repo = $env:GITHUB_REPOSITORY
+          $api  = "https://api.github.com/repos/$repo"
+          $hdr  = @{
+            Authorization          = "Bearer $env:GH_TOKEN"
+            Accept                 = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          "目标 tag=$tag repo=$repo"
 
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --title $tag --notes-file .github/release-body.md
-            if ($LASTEXITCODE -ne 0) { throw "gh release create 失败（tag=$tag）" }
+          # 取 Release；不存在则建（发布说明放仓库里，便于审查变更）
+          $rel = $null
+          try { $rel = Invoke-RestMethod -Uri "$api/releases/tags/$tag" -Headers $hdr -TimeoutSec 60 }
+          catch { $rel = $null }
+          if (-not $rel) {
+            $body = @{
+              tag_name = $tag
+              name     = $tag
+              body     = (Get-Content -LiteralPath .github/release-body.md -Raw)
+              draft    = $false
+            } | ConvertTo-Json
+            $rel = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $hdr `
+                     -Body $body -ContentType 'application/json' -TimeoutSec 60
+          }
+          "release id = $($rel.id)"
+
+          # 已有资产按名字建索引，同名先删再传（等价 --clobber，便于同 tag 重跑）
+          $existing = @{}
+          foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
+            $existing[$a.name] = $a.id
           }
 
-          # --clobber：同名资产覆盖，便于同一 tag 重跑 CI
-          $files = Get-ChildItem -Path dist-out -File | ForEach-Object { $_.FullName }
-          gh release upload $tag $files --clobber
-          if ($LASTEXITCODE -ne 0) { throw "gh release upload 失败（tag=$tag）" }
-
-          # 清掉历史遗留的错误资产名（内容对、名字错的那种）
-          $assets = @(gh release view $tag --json assets --jq '.assets[].name')
-          if ($assets -contains 'default.exe') {
-            gh release delete-asset $tag default.exe -y
-            Write-Host "已删除历史遗留的错误资产名 default.exe"
+          foreach ($f in Get-ChildItem -Path dist-out -File | Sort-Object Name) {
+            $name = $f.Name
+            if ($existing.ContainsKey($name)) {
+              Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($existing[$name])" -Headers $hdr -TimeoutSec 60
+              "同名旧资产已删除: $name"
+            }
+            $enc    = [uri]::EscapeDataString($name)
+            $upload = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$enc"
+            try {
+              $r = Invoke-RestMethod -Method Post -Uri $upload -Headers $hdr `
+                     -ContentType 'application/octet-stream' -InFile $f.FullName -TimeoutSec 900
+              "上传成功: {0} -> 资产名 '{1}' ({2} 字节)" -f $name, $r.name, $r.size
+            } catch {
+              # 把服务端返回体也带出来，否则只剩一句 "Response status code 422"
+              $detail = $_.Exception.Message
+              if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $detail = $_.ErrorDetails.Message }
+              Write-Host "::error::上传失败 '$name': $detail"
+              throw
+            }
           }
-          $after = @(gh release view $tag --json assets --jq '.assets[].name' | Sort-Object)
-          Write-Host "::notice::Release $tag 资产清单: $($after -join ', ')"
+
+          # 清掉 run#3 遗留的错误资产名（内容对、名字错）
+          foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
+            if ($a.name -eq 'default.exe') {
+              Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($a.id)" -Headers $hdr -TimeoutSec 60
+              "已删除历史遗留的错误资产名 default.exe"
+            }
+          }
+
+          $fin = @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60 |
+                   ForEach-Object { $_.name })
+          Write-Host "::notice::Release $tag 最终资产: $($fin -join ', ')"
+          # 资产清单必须与 dist-out 完全一致，少一个就是发布不完整
+          $expected = @(Get-ChildItem -Path dist-out -File | ForEach-Object Name)
+          $missing  = @($expected | Where-Object { $fin -notcontains $_ })
+          if ($missing) { throw "以下资产未成功发布: $($missing -join ', ')" }
