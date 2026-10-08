@@ -117,6 +117,14 @@ jobs:
           }
           Copy-Item -LiteralPath README.md, LICENSE -Destination dist-out -Force
           Get-ChildItem -Path dist-out | Select-Object Name, Length
+          # 把真实文件名连同码点写进 annotation：Actions 日志匿名不可读，而下游
+          # 环节曾把「同页对照工具.exe」这个名字弄丢。只有把 runner 侧的原始名字
+          # 留成公开证据，才能区分"名字在打包时就错了"还是"在上传环节被改掉"。
+          $detail = (Get-ChildItem -Path dist-out | ForEach-Object {
+            $cps = ($_.Name.ToCharArray() | ForEach-Object { '{0:X4}' -f [int]$_ }) -join ' '
+            "$($_.Name) [$($_.Length)B] = $cps"
+          }) -join ' | '
+          Write-Host "::notice::dist-out 实际内容: $detail"
 
       # 启动器可运行性冒烟测试。
       # 注意入口选择：main() 的每个分支都要求 argv 非空（dual_gui.py:758-781），
@@ -196,21 +204,37 @@ jobs:
           name: dual-pdf-tool-exes
           path: dist-out/
 
+      # 发布资产用 gh CLI 上传，不再用 softprops/action-gh-release。
+      # 该 action 对非 ASCII 文件名有已知缺陷（issues #542 / #159），本项目实测
+      # 把「同页对照工具.exe」上传成了 default.exe —— 文件内容正确（已下载核对：
+      # 无 PyMuPDF、含 tkinter），但名字错，用户照 README 根本找不到文件。
+      # gh 直接走 REST API，文件名原样保留。
       - name: Attach to Release (tag runs)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist-out/*
-          body: |
-            同页对照 PDF 工具 —— 免安装版本。
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          "目标 tag: $tag"
 
-            | 文件 | 说明 |
-            |---|---|
-            | `同页对照工具.exe` | 图形界面，双击即用 |
-            | `DualGuiCLI.exe` | 命令行版（脚本/回归调用） |
-            | `DualEngine.exe` | 合成引擎，由上面两个自动调起，**勿单独使用** |
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title $tag --notes-file .github/release-body.md
+            if ($LASTEXITCODE -ne 0) { throw "gh release create 失败（tag=$tag）" }
+          }
 
-            三个文件需放在**同一目录**下。在线翻译功能需要联网。
+          # --clobber：同名资产覆盖，便于同一 tag 重跑 CI
+          $files = Get-ChildItem -Path dist-out -File | ForEach-Object { $_.FullName }
+          gh release upload $tag $files --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload 失败（tag=$tag）" }
 
-            本版本以 AGPL-3.0 发布，详见仓库中的 LICENSE、DEPENDENCIES.md 与
-            THIRD-PARTY-NOTICES.md。
+          # 清掉历史遗留的错误资产名（内容对、名字错的那种）
+          $assets = @(gh release view $tag --json assets --jq '.assets[].name')
+          if ($assets -contains 'default.exe') {
+            gh release delete-asset $tag default.exe -y
+            Write-Host "已删除历史遗留的错误资产名 default.exe"
+          }
+          $after = @(gh release view $tag --json assets --jq '.assets[].name' | Sort-Object)
+          Write-Host "::notice::Release $tag 资产清单: $($after -join ', ')"
