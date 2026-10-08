@@ -57,10 +57,16 @@ def main():
     # 可选第 5 参：成品文件名模板（默认 "{nm}.pdf"；出厂成品是
     # "{nm} 同页对照.pdf"，此时直接审交付目录本身，不必再摆中转目录）
     pat = sys.argv[5] if len(sys.argv) > 5 else "{nm}.pdf"
-    py = os.path.join(os.path.dirname(root.rstrip("/\\")),
-                      "同页对照工具-便携包", "engine", "python", "python.exe")
+    # 便携包 Python 的定位：环境变量优先，其次按工具目录的兄弟目录推导。
+    # 找不到就直接报错退出——审计脚本跑的是便携包那份依赖版本，退回系统
+    # Python 会因为 PyMuPDF 版本不同而得出不可比的结论。
+    py = os.environ.get("DUAL_AUDIT_PY") or os.path.join(
+        os.path.dirname(root.rstrip("/\\")),
+        "同页对照工具-便携包", "engine", "python", "python.exe")
     if not os.path.exists(py):
-        py = r"C:/Users/LOCAL/Desktop/同页对照工具-便携包/engine/python/python.exe"
+        sys.exit("找不到便携包 Python：%s\n"
+                 "请设环境变量 DUAL_AUDIT_PY 指向便携包的 engine\\python\\python.exe，"
+                 "或让它与本工具目录保持上述相对位置。" % py)
     lines = []
     lines.append("%-42s %5s %5s %5s %5s %5s %5s %6s %5s | %s"
                  % ("样本", "撕裂", "压字", "排版", "远抛", "像素", "缺项",
