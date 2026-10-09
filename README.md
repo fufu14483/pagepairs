@@ -45,9 +45,10 @@ python make_dual.py 英文原文.pdf --mono 中文译文.pdf -o 同页对照.pdf
 
 ### 方式一：下载 Releases 的 zip，解压后双击 `同页对照工具.exe`（推荐，无需 Python）
 
-> 发布包由 CI 在打 tag 时构建：`pagepairs-v1.0.1-win64.zip`（版本号随 tag 变化）。
-> 打成 zip 是因为 **GitHub Release 的资产名不能是中文**（直传中文名会被静默丢弃），
-> zip **内部**的文件名仍是中文。也可本地运行 `./build_exes.ps1` 自行重建。
+> 发布包由 CI 在打 tag 时构建：`pagepairs-<版本>-win64.zip`（如
+> `pagepairs-v1.0.1-win64.zip`）。打成 zip 是因为 **GitHub Release 的资产名不能是
+> 中文**（直传中文名会被静默丢弃），zip **内部**的文件名仍是中文。
+> 也可本地运行 `./build_exes.ps1` 自行重建。
 
 1. 解压后双击 `同页对照工具.exe`（自包含单文件，免 Python；三个 exe 需在同一目录，
    整个文件夹可放桌面/任何位置）；
