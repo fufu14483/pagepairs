@@ -264,6 +264,24 @@ jobs:
             return $m
           }
 
+          function Clear-AssetName([string]$n) {
+            # 删资产必须"查-删-复查"：删除提交成功后，上传服务端要滞后几秒才释放
+            # 这个名字，若立刻重传就会一直撞 already_exists——run#6 连打 4 次、
+            # 整步只花 5 秒，全部撞在同一堵墙上，就是缺了这一步复查等待。
+            for ($k = 0; $k -lt 12; $k++) {
+              $m = Get-AssetMap
+              if (-not $m.ContainsKey($n)) { return $true }
+              try {
+                Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($m[$n])" -Headers $hdr -TimeoutSec 60
+                "已删除同名旧资产: $n (id=$($m[$n]))"
+              } catch {
+                Write-Host "删除资产 '$n' 出错（继续复查）: $($_.Exception.Message)"
+              }
+              Start-Sleep -Seconds 5
+            }
+            return -not (Get-AssetMap).ContainsKey($n)
+          }
+
           foreach ($f in $files) {
             $name = $f.Name
             $staged = $stageOf[$name]
@@ -271,7 +289,12 @@ jobs:
             $url = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$enc"
             $ok = $false
             $last = ''
-            for ($try = 1; $try -le 4 -and -not $ok; $try++) {
+            for ($try = 1; $try -le 5 -and -not $ok; $try++) {
+              # 上传前先确认名字已释放，不让一次注定 422 的请求发出去
+              if (-not (Clear-AssetName $name)) {
+                Write-Host "::error::同名旧资产 '$name' 一直未释放，无法上传"
+                throw "无法清除同名旧资产: $name"
+              }
               # 用 curl 而不是 Invoke-RestMethod：后者传 DualEngine.exe（约 32MB）时
               # 实测被服务端重置连接（"Unable to write data to the transport
               # connection ... forcibly closed"），且发生在第一个文件上，整步失败。
@@ -286,21 +309,11 @@ jobs:
                 "上传成功: $name（第 $try 次尝试）"
               } else {
                 Write-Host "第 $try 次上传 '$name' 失败 (curl rc=$LASTEXITCODE): $last"
-                # 只有"同名已存在"才删旧资产再重试：避免上传失败时把好资产删掉，
-                # 让 Release 越修越残缺
-                if ($last -match 'already_exists') {
-                  $m = Get-AssetMap
-                  if ($m.ContainsKey($name)) {
-                    Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($m[$name])" -Headers $hdr -TimeoutSec 60
-                    "已删除同名旧资产，准备重传: $name"
-                  }
-                } else {
-                  Start-Sleep -Seconds 10
-                }
+                Start-Sleep -Seconds 10
               }
             }
             if (-not $ok) {
-              Write-Host "::error::上传失败 '$name'（重试 4 次仍失败）: $last"
+              Write-Host "::error::上传失败 '$name'（重试 5 次仍失败）: $last"
               throw "上传失败: $name"
             }
           }
