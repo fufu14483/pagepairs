@@ -204,12 +204,11 @@ jobs:
           name: dual-pdf-tool-exes
           path: dist-out/
 
-      # 发布资产直接走 REST API 上传（不用 softprops/action-gh-release，也不用
-      # gh CLI）：两者都在「同页对照工具.exe」这个中文名上栽了跟头——
-      #   run#3（action）把它传成了 default.exe（内容对、名字错）；
-      #   run#4（gh）静默丢弃，Release 里干脆没有 GUI 版，且退出码仍是 0。
-      # 资产名是 query 参数 name=<...>，中文必须显式 URL 编码；这里逐文件上传
-      # 并把每个失败原因写成 ::error:: 注解，杜绝"静默跳过"再次发生。
+      # 发布资产直接走 REST API 上传，不用 softprops/action-gh-release，也不用 gh：
+      #   run#3（action）把「同页对照工具.exe」传成了 default.exe（内容对、名字错）；
+      #   run#4（gh）对该文件静默丢弃，Release 里没有 GUI 版且退出码仍为 0。
+      # 资产名是 query 参数 name=<...>，中文必须显式百分号编码；本步骤逐文件上传、
+      # 逐文件重试，并把每个失败原因写成 ::error:: 注解，杜绝"静默跳过"再次发生。
       - name: Attach to Release (tag runs)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -243,30 +242,66 @@ jobs:
           }
           "release id = $($rel.id)"
 
-          # 已有资产按名字建索引，同名先删再传（等价 --clobber，便于同 tag 重跑）
-          $existing = @{}
-          foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
-            $existing[$a.name] = $a.id
+          # 待发布的文件先复制成 ASCII 临时名再交给外部进程上传：
+          # 这样 curl 只接触纯 ASCII 路径，中文仅出现在 URL 的 name= 参数里
+          # （已百分号编码），把"路径编码"这一整类风险归零。
+          $staging = Join-Path $env:RUNNER_TEMP 'relstage'
+          Remove-Item -LiteralPath $staging -Recurse -Force -EA SilentlyContinue
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          $files = @(Get-ChildItem -Path dist-out -File | Sort-Object Name)
+          $stageOf = @{}
+          for ($i = 0; $i -lt $files.Count; $i++) {
+            $tmp = Join-Path $staging ('asset{0:D2}.bin' -f $i)
+            Copy-Item -LiteralPath $files[$i].FullName -Destination $tmp -Force
+            $stageOf[$files[$i].Name] = $tmp
           }
 
-          foreach ($f in Get-ChildItem -Path dist-out -File | Sort-Object Name) {
-            $name = $f.Name
-            if ($existing.ContainsKey($name)) {
-              Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($existing[$name])" -Headers $hdr -TimeoutSec 60
-              "同名旧资产已删除: $name"
+          function Get-AssetMap {
+            $m = @{}
+            foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
+              $m[$a.name] = $a.id
             }
-            $enc    = [uri]::EscapeDataString($name)
-            $upload = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$enc"
-            try {
-              $r = Invoke-RestMethod -Method Post -Uri $upload -Headers $hdr `
-                     -ContentType 'application/octet-stream' -InFile $f.FullName -TimeoutSec 900
-              "上传成功: {0} -> 资产名 '{1}' ({2} 字节)" -f $name, $r.name, $r.size
-            } catch {
-              # 把服务端返回体也带出来，否则只剩一句 "Response status code 422"
-              $detail = $_.Exception.Message
-              if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $detail = $_.ErrorDetails.Message }
-              Write-Host "::error::上传失败 '$name': $detail"
-              throw
+            return $m
+          }
+
+          foreach ($f in $files) {
+            $name = $f.Name
+            $staged = $stageOf[$name]
+            $enc = [uri]::EscapeDataString($name)
+            $url = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$enc"
+            $ok = $false
+            $last = ''
+            for ($try = 1; $try -le 4 -and -not $ok; $try++) {
+              # 用 curl 而不是 Invoke-RestMethod：后者传 DualEngine.exe（约 32MB）时
+              # 实测被服务端重置连接（"Unable to write data to the transport
+              # connection ... forcibly closed"），且发生在第一个文件上，整步失败。
+              $last = & curl.exe -sS --fail-with-body -X POST `
+                        -H "Authorization: Bearer $env:GH_TOKEN" `
+                        -H 'Accept: application/vnd.github+json' `
+                        -H 'X-GitHub-Api-Version: 2022-11-28' `
+                        -H 'Content-Type: application/octet-stream' `
+                        --data-binary "@$staged" $url
+              if ($LASTEXITCODE -eq 0) {
+                $ok = $true
+                "上传成功: $name（第 $try 次尝试）"
+              } else {
+                Write-Host "第 $try 次上传 '$name' 失败 (curl rc=$LASTEXITCODE): $last"
+                # 只有"同名已存在"才删旧资产再重试：避免上传失败时把好资产删掉，
+                # 让 Release 越修越残缺
+                if ($last -match 'already_exists') {
+                  $m = Get-AssetMap
+                  if ($m.ContainsKey($name)) {
+                    Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($m[$name])" -Headers $hdr -TimeoutSec 60
+                    "已删除同名旧资产，准备重传: $name"
+                  }
+                } else {
+                  Start-Sleep -Seconds 10
+                }
+              }
+            }
+            if (-not $ok) {
+              Write-Host "::error::上传失败 '$name'（重试 4 次仍失败）: $last"
+              throw "上传失败: $name"
             }
           }
 
