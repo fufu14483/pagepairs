@@ -216,6 +216,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # 任何未捕获异常都变成公开注解：Actions 日志匿名不可读（403），
+          # 否则失败只会看到一句 "Process completed with exit code 1"，
+          # 而真正的报错藏在读不到的日志里（run#8 就是这样，2 秒即失败、
+          # 我打的 clear/upload 注解一条都没来得及输出）。
+          trap {
+            $m = $_.Exception.Message
+            $p = ($_.InvocationInfo.PositionMessage -replace "`r?`n", ' ')
+            if ($m.Length -gt 500) { $m = $m.Substring(0, 500) }
+            if ($p.Length -gt 400) { $p = $p.Substring(0, 400) }
+            Write-Host "::error::发布步骤异常: $m | 位置: $p"
+            exit 1
+          }
           $tag  = $env:GITHUB_REF_NAME
           $repo = $env:GITHUB_REPOSITORY
           $api  = "https://api.github.com/repos/$repo"
@@ -240,7 +252,10 @@ jobs:
             $rel = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $hdr `
                      -Body $body -ContentType 'application/json' -TimeoutSec 60
           }
-          Write-Host "::notice::[release] id=$($rel.id) tag='$($rel.tag_name)' 已存在资产=$(@($rel.assets).Count) created=$($rel.created_at)"
+          # 注意 @($null).Count 会虚报成 1，计数先判空
+          $assetCount = 0
+          if ($rel.assets) { $assetCount = @($rel.assets).Count }
+          Write-Host "::notice::[release] id=$($rel.id) tag='$($rel.tag_name)' 已存在资产=$assetCount created=$($rel.created_at)"
 
           # 待发布的文件先复制成 ASCII 临时名再交给外部进程上传：
           # 这样 curl 只接触纯 ASCII 路径，中文仅出现在 URL 的 name= 参数里
@@ -258,8 +273,11 @@ jobs:
 
           function Get-AssetMap {
             $m = @{}
-            foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
-              $m[$a.name] = $a.id
+            # 防御性遍历：资产数为 0 时响应可能是空数组/null，直接取 $a.name
+            # 会拿到 $null 并把 null 当 hashtable 键，那一步会直接抛异常
+            $resp = Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60
+            foreach ($a in @($resp)) {
+              if ($null -ne $a -and $a.name) { $m[[string]$a.name] = $a.id }
             }
             return $m
           }
