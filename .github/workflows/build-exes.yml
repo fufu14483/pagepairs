@@ -240,7 +240,7 @@ jobs:
             $rel = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $hdr `
                      -Body $body -ContentType 'application/json' -TimeoutSec 60
           }
-          "release id = $($rel.id)"
+          Write-Host "::notice::[release] id=$($rel.id) tag='$($rel.tag_name)' 已存在资产=$(@($rel.assets).Count) created=$($rel.created_at)"
 
           # 待发布的文件先复制成 ASCII 临时名再交给外部进程上传：
           # 这样 curl 只接触纯 ASCII 路径，中文仅出现在 URL 的 name= 参数里
@@ -270,16 +270,24 @@ jobs:
             # 整步只花 5 秒，全部撞在同一堵墙上，就是缺了这一步复查等待。
             for ($k = 0; $k -lt 12; $k++) {
               $m = Get-AssetMap
+              if ($k -eq 0) {
+                # 公开注解是匿名唯一的可观测通道，把 runner 侧真实看到的资产名打出来
+                Write-Host "::notice::[clear] '$n' 现有资产名=[$($m.Keys -join ', ')] 条目=$($m.Count)"
+              }
               if (-not $m.ContainsKey($n)) { return $true }
               try {
-                Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($m[$n])" -Headers $hdr -TimeoutSec 60
-                "已删除同名旧资产: $n (id=$($m[$n]))"
+                Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($m[$n])" -Headers $hdr -TimeoutSec 60 | Out-Null
+                Write-Host "::notice::[clear] 已发出删除: '$n' id=$($m[$n])（第 $($k+1) 轮）"
               } catch {
-                Write-Host "删除资产 '$n' 出错（继续复查）: $($_.Exception.Message)"
+                $d = $_.Exception.Message
+                if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $d = $_.ErrorDetails.Message }
+                Write-Host "::warning::[clear] 删除 '$n' id=$($m[$n]) 失败: $d"
               }
               Start-Sleep -Seconds 5
             }
-            return -not (Get-AssetMap).ContainsKey($n)
+            $still = (Get-AssetMap).ContainsKey($n)
+            Write-Host "::warning::[clear] '$n' 12 轮后仍存在=$still"
+            return (-not $still)
           }
 
           foreach ($f in $files) {
@@ -306,9 +314,9 @@ jobs:
                         --data-binary "@$staged" $url
               if ($LASTEXITCODE -eq 0) {
                 $ok = $true
-                "上传成功: $name（第 $try 次尝试）"
+                Write-Host "::notice::[upload] '$name' 第 $try 次成功"
               } else {
-                Write-Host "第 $try 次上传 '$name' 失败 (curl rc=$LASTEXITCODE): $last"
+                Write-Host "::notice::[upload] '$name' 第 $try 次失败 (curl rc=$LASTEXITCODE): $last"
                 Start-Sleep -Seconds 10
               }
             }
