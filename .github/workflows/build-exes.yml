@@ -336,6 +336,7 @@ jobs:
             return (-not $still)
           }
 
+          $uploaded = @()   # 本次真正上传成功的资产名——后面清理旧资产时以此为准
           foreach ($f in $files) {
             $name = $f.Name
             $staged = $stageOf[$name]
@@ -360,6 +361,7 @@ jobs:
                         --data-binary "@$staged" $url
               if ($LASTEXITCODE -eq 0) {
                 $ok = $true
+                $uploaded += $name
                 Write-Host "::notice::[upload] '$name' 第 $try 次成功"
               } else {
                 Write-Host "::notice::[upload] '$name' 第 $try 次失败 (curl rc=$LASTEXITCODE): $last"
@@ -369,17 +371,25 @@ jobs:
               }
             }
             if (-not $ok) {
-              Write-Host "::error::上传失败 '$name'（重试 5 次仍失败）: $last"
+              Write-Host "::error::上传失败 '$name'（重试 6 次仍失败）: $last"
               throw "上传失败: $name"
             }
           }
 
           # 清掉不属于本次发布的资产（例如旧方案留下的散装 exe），
-          # 让 Release 资产与 dist-out 严格一致。删除失败只告警不中断：
-          # 上传已经成功，不该因为清理旧文件失败而把整次发布判失败。
+          # 让 Release 资产与本次上传结果一致。
+          # 保留集用 $uploaded（本次真正上传成功的名字），而不是重新读 dist-out：
+          # 上传成功的名字是权威依据，且与目录解析/文件系统无关。
           $expected = @(Get-ChildItem -Path dist-out -File | ForEach-Object Name)
-          foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
-            if ($null -ne $a -and $a.name -and ($expected -notcontains $a.name)) {
+          Write-Host "::notice::[prune] dist-out=[$($expected -join ', ')] 条目=$($expected.Count)；本次已上传=[$($uploaded -join ', ')] 条目=$($uploaded.Count)"
+          if ($expected.Count -eq 0) { throw "dist-out 里解析不到任何文件，拒绝继续（防止误删刚上传的资产）" }
+          # 必须先把响应落到变量再 @() 枚举：PowerShell 7 的 Invoke-RestMethod
+          # 不会枚举顶层 JSON 数组，写成 @(Invoke-RestMethod ...) 会得到"一个元素
+          # 就是整个数组"——run#10 因此把 $a.name 取成 5 个名字拼起来的一串、
+          # $a.id 取成 id 数组，误删了 DualEngine.exe 并误判三个新资产缺失。
+          $assetsNow = Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60
+          foreach ($a in @($assetsNow)) {
+            if ($null -ne $a -and $a.name -and ($uploaded -notcontains [string]$a.name)) {
               try {
                 Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($a.id)" -Headers $hdr -TimeoutSec 60 | Out-Null
                 Write-Host "::notice::[prune] 已删除多余资产: $($a.name)"
@@ -399,7 +409,8 @@ jobs:
 
           # 最后核对资产清单（逐项判空，避免再踩 $null 的坑）
           $fin = @()
-          foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
+          $assetsFin = Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60
+          foreach ($a in @($assetsFin)) {
             if ($null -ne $a -and $a.name) { $fin += [string]$a.name }
           }
           Write-Host "::notice::Release $tag 最终资产: $($fin -join ', ')"
