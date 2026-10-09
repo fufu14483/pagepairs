@@ -113,13 +113,39 @@ jobs:
           $names = @("同页对照工具.exe", "DualGuiCLI.exe", "DualEngine.exe")
           foreach ($n in $names) {
             if (-not (Test-Path -LiteralPath $n)) { throw "缺少构建产物: $n" }
-            Copy-Item -LiteralPath $n -Destination dist-out -Force
           }
+
+          # 发布资产名必须是 ASCII。实测三个通道都在中文名上失败：
+          #   softprops/action-gh-release 把它改名成 default.exe（内容对、名字错）；
+          #   gh release upload 静默丢弃（退出码仍为 0，Release 里干脆没有该文件）；
+          #   直连 REST + curl 上传时四个 ASCII 文件都秒传成功，唯独中文名那个
+          #   既没有资产也没有任何回执。
+          # 因此把三个 exe 打进一个 ASCII 名的 zip，zip 内部仍是中文名 exe。
+          $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'snapshot' }
+          $zipName = "pagepairs-$ver-win64.zip"
+          $zstage = Join-Path $env:TEMP 'zipstage'
+          Remove-Item -LiteralPath $zstage -Recurse -Force -EA SilentlyContinue
+          New-Item -ItemType Directory -Path $zstage -Force | Out-Null
+          foreach ($n in $names) { Copy-Item -LiteralPath $n -Destination $zstage -Force }
+          Compress-Archive -Path (Join-Path $zstage '*') `
+                           -DestinationPath (Join-Path 'dist-out' $zipName) -Force
+
+          # 校验 zip 内条目名：中文名必须原样保留，否则用户解压后找不到文件
+          # （本机已验证：CJK 条目名按 UTF-8 编码且置了 flag 0x0800，
+          #   资源管理器解压后能正常显示；条目名写错必须在 CI 就拦下）
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path (Join-Path 'dist-out' $zipName)).Path)
+          $entries = @($z.Entries | ForEach-Object FullName)
+          $z.Dispose()
+          foreach ($n in $names) {
+            if ($entries -notcontains $n) { throw "zip 内缺少 $n（实际条目：$($entries -join ', ')）" }
+          }
+          Write-Host "::notice::zip $zipName 条目=[$($entries -join ', ')]"
+
           Copy-Item -LiteralPath README.md, LICENSE -Destination dist-out -Force
           Get-ChildItem -Path dist-out | Select-Object Name, Length
-          # 把真实文件名连同码点写进 annotation：Actions 日志匿名不可读，而下游
-          # 环节曾把「同页对照工具.exe」这个名字弄丢。只有把 runner 侧的原始名字
-          # 留成公开证据，才能区分"名字在打包时就错了"还是"在上传环节被改掉"。
+          # 把 dist-out 实际内容连同码点写进 annotation：Actions 日志匿名不可读，
+          # 这是排查发布环节唯一可用的公开证据通道。
           $detail = (Get-ChildItem -Path dist-out | ForEach-Object {
             $cps = ($_.Name.ToCharArray() | ForEach-Object { '{0:X4}' -f [int]$_ }) -join ' '
             "$($_.Name) [$($_.Length)B] = $cps"
@@ -135,7 +161,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = ".\dist-out\DualGuiCLI.exe"
+          # dist-out 现在装的是发布资产（zip + LICENSE + README），构建出的 exe 在
+          # 仓库根目录（build_exes.ps1 会把它们复制到 $PSScriptRoot），故指向根目录
+          $exe = ".\DualGuiCLI.exe"
           # 用 Start-Process + WaitForExit(ms) 而不是 -Wait：万一 exe 起了主循环，
           # 也能在 120 秒强制收掉并判失败，而不是挂满作业超时。
           $p = Start-Process -FilePath $exe -ArgumentList '--cli' `
@@ -158,7 +186,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = ".\dist-out\DualGuiCLI.exe"
+          $exe = ".\DualGuiCLI.exe"      # 同冒烟测试：exe 在仓库根目录，不在 dist-out
           $p = Start-Process -FilePath $exe -ArgumentList '--check' `
                 -NoNewWindow -PassThru `
                 -RedirectStandardOutput check-out.txt `
@@ -185,7 +213,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           foreach ($exe in @("DualGuiCLI.exe", "同页对照工具.exe")) {
-            $path = ".\dist-out\$exe"
+            $path = ".\$exe"    # 构建产物在仓库根目录；dist-out 只装发布资产
             if (-not (Test-Path -LiteralPath $path)) { throw "缺少 $path" }
             $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
             if ($bytes.Length -lt 1MB) {
@@ -301,7 +329,7 @@ jobs:
                 if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $d = $_.ErrorDetails.Message }
                 Write-Host "::warning::[clear] 删除 '$n' id=$($m[$n]) 失败: $d"
               }
-              Start-Sleep -Seconds 5
+              Start-Sleep -Seconds 10
             }
             $still = (Get-AssetMap).ContainsKey($n)
             Write-Host "::warning::[clear] '$n' 12 轮后仍存在=$still"
@@ -315,7 +343,7 @@ jobs:
             $url = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$enc"
             $ok = $false
             $last = ''
-            for ($try = 1; $try -le 5 -and -not $ok; $try++) {
+            for ($try = 1; $try -le 6 -and -not $ok; $try++) {
               # 上传前先确认名字已释放，不让一次注定 422 的请求发出去
               if (-not (Clear-AssetName $name)) {
                 Write-Host "::error::同名旧资产 '$name' 一直未释放，无法上传"
@@ -335,7 +363,9 @@ jobs:
                 Write-Host "::notice::[upload] '$name' 第 $try 次成功"
               } else {
                 Write-Host "::notice::[upload] '$name' 第 $try 次失败 (curl rc=$LASTEXITCODE): $last"
-                Start-Sleep -Seconds 10
+                # run#7 实测：删除资产后上传服务端仍可能把它判为已存在约 50 秒，
+                # 所以重试间隔给足（6 次 × 15 秒 ≈ 75 秒窗口）
+                Start-Sleep -Seconds 15
               }
             }
             if (-not $ok) {
@@ -344,18 +374,37 @@ jobs:
             }
           }
 
-          # 清掉 run#3 遗留的错误资产名（内容对、名字错）
+          # 清掉不属于本次发布的资产（例如旧方案留下的散装 exe），
+          # 让 Release 资产与 dist-out 严格一致。删除失败只告警不中断：
+          # 上传已经成功，不该因为清理旧文件失败而把整次发布判失败。
+          $expected = @(Get-ChildItem -Path dist-out -File | ForEach-Object Name)
           foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
-            if ($a.name -eq 'default.exe') {
-              Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($a.id)" -Headers $hdr -TimeoutSec 60
-              "已删除历史遗留的错误资产名 default.exe"
+            if ($null -ne $a -and $a.name -and ($expected -notcontains $a.name)) {
+              try {
+                Invoke-RestMethod -Method Delete -Uri "$api/releases/assets/$($a.id)" -Headers $hdr -TimeoutSec 60 | Out-Null
+                Write-Host "::notice::[prune] 已删除多余资产: $($a.name)"
+              } catch {
+                Write-Host "::warning::[prune] 删除多余资产 '$($a.name)' 失败: $($_.Exception.Message)"
+              }
             }
           }
 
-          $fin = @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60 |
-                   ForEach-Object { $_.name })
+          # 发布说明里的 zip 名随 tag 变化，替换占位符后写回 Release
+          $zipName = [string](Get-ChildItem -Path dist-out -Filter '*.zip' | Select-Object -First 1 -ExpandProperty Name)
+          if (-not $zipName) { throw "dist-out 里没有 zip，发布说明无法生成" }
+          $bodyMd = (Get-Content -LiteralPath .github/release-body.md -Raw) -replace '\{\{ZIP\}\}', $zipName
+          Invoke-RestMethod -Method Patch -Uri "$api/releases/$($rel.id)" -Headers $hdr `
+            -Body (@{ body = $bodyMd } | ConvertTo-Json) -ContentType 'application/json' -TimeoutSec 60 | Out-Null
+          "发布说明已更新，zip 名 = $zipName"
+
+          # 最后核对资产清单（逐项判空，避免再踩 $null 的坑）
+          $fin = @()
+          foreach ($a in @(Invoke-RestMethod -Uri "$api/releases/$($rel.id)/assets" -Headers $hdr -TimeoutSec 60)) {
+            if ($null -ne $a -and $a.name) { $fin += [string]$a.name }
+          }
           Write-Host "::notice::Release $tag 最终资产: $($fin -join ', ')"
           # 资产清单必须与 dist-out 完全一致，少一个就是发布不完整
-          $expected = @(Get-ChildItem -Path dist-out -File | ForEach-Object Name)
-          $missing  = @($expected | Where-Object { $fin -notcontains $_ })
+          $missing = @($expected | Where-Object { $fin -notcontains $_ })
           if ($missing) { throw "以下资产未成功发布: $($missing -join ', ')" }
+          $extra = @($fin | Where-Object { $expected -notcontains $_ })
+          if ($extra) { Write-Host "::warning::Release 上仍有不属于本次发布的资产: $($extra -join ', ')" }

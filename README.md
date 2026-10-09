@@ -28,7 +28,8 @@
 
 ### 方式零：从源码运行（clone 本仓库后）
 
-本仓库**只含源码**（0.6 MB），不含 exe。预编译 exe 见 Releases 页面。
+本仓库**只含源码**（0.6 MB），不含 exe。预编译 exe 见 Releases 页面（发布包为
+ASCII 名的 zip，解压后得到三个 exe）。
 
 ```powershell
 # 1. 装依赖（引擎需要 PyMuPDF，版本务必与 README 踩坑表一致）
@@ -42,12 +43,14 @@ python make_dual.py 英文原文.pdf --mono 中文译文.pdf -o 同页对照.pdf
 在线翻译需另行准备 `pdf2zh_next`，用 `--p2zh` 指定路径，或设环境变量
 `DUAL_P2ZH`。合成（已有 mono 译文）不需要它。
 
-### 方式一：双击 `同页对照工具.exe`（推荐，无需 Python / 无需本 README 之外的一切）
+### 方式一：下载 Releases 的 zip，解压后双击 `同页对照工具.exe`（推荐，无需 Python）
 
-> 该 exe 由 CI 在打 tag 时构建并发布到 Releases；也可本地运行
-> `./build_exes.ps1` 自行重建。
+> 发布包由 CI 在打 tag 时构建：`pagepairs-v1.0.1-win64.zip`（版本号随 tag 变化）。
+> 打成 zip 是因为 **GitHub Release 的资产名不能是中文**（直传中文名会被静默丢弃），
+> zip **内部**的文件名仍是中文。也可本地运行 `./build_exes.ps1` 自行重建。
 
-1. 双击 exe（可放桌面/任何文件夹，**单文件 30MB，自包含**）；
+1. 解压后双击 `同页对照工具.exe`（自包含单文件，免 Python；三个 exe 需在同一目录，
+   整个文件夹可放桌面/任何位置）；
 2. 选"英文原文 PDF"；"中文译文"留空即自动在同目录及 `translated\` 里找 mono 译文，找不到且勾选"自动在线翻译"则调 pdf2zh 翻译；
    整页竖排的图纸（PCB/机械图）会先自动**转正**再翻译合成（勾选"竖排图纸转正"可关掉）——否则 pdf2zh 根本看不见竖着的正文；
 3. 输出路径自动填好（原文目录 `translated\<名> 同页对照.pdf`，可改）；
@@ -112,7 +115,7 @@ powershell -ExecutionPolicy Bypass -File build_exes.ps1
 
 | 文件 | 作用 |
 |---|---|
-| `同页对照工具.exe` | **图形界面单文件版**（双击即用，免 Python；"干净"启动器） |
+| `同页对照工具.exe` | **图形界面单文件版**（双击即用，免 Python；"干净"启动器；Release 中以 ASCII 名 zip 分发，zip 内即此名） |
 | `DualGuiCLI.exe` | 命令行单文件版（回归/脚本调用，`--cli`；同启动器） |
 | `DualEngine.exe` | **合成引擎单文件版**（含 PyMuPDF；启动器自动调用，勿单独分发） |
 | `dual_gui.py` | 三者的共同源码（Tkinter GUI + CLI + `--engine-run`） |
